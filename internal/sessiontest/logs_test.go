@@ -11,7 +11,7 @@ import (
 func TestLogging(t *testing.T) {
 	client, _ := parseStorage(t)
 
-	logs, err := client.LoadNewestLogs(100)
+	logs, err := client.Logs()
 	oldLogLength := len(logs)
 	require.NoError(t, err)
 	attrid := irma.NewAttributeTypeIdentifier("irma-demo.RU.studentCard.studentID")
@@ -21,11 +21,11 @@ func TestLogging(t *testing.T) {
 	request = getCombinedIssuanceRequest(attrid)
 	sessionHelper(t, request, "issue", client)
 
-	logs, err = client.LoadNewestLogs(100)
+	logs, err = client.Logs()
 	require.NoError(t, err)
 	require.True(t, len(logs) == oldLogLength+1)
 
-	entry := logs[0]
+	entry := logs[len(logs)-1]
 	require.NotNil(t, entry)
 	require.NoError(t, err)
 	issued, err := entry.GetIssuedCredentials(client.Configuration)
@@ -38,35 +38,24 @@ func TestLogging(t *testing.T) {
 	// Do disclosure session
 	request = getDisclosureRequest(attrid)
 	sessionHelper(t, request, "verification", client)
-	logs, err = client.LoadNewestLogs(100)
+	logs, err = client.Logs()
 	require.NoError(t, err)
 	require.True(t, len(logs) == oldLogLength+2)
 
-	entry = logs[0]
+	entry = logs[len(logs)-1]
 	require.NotNil(t, entry)
 	require.NoError(t, err)
 	disclosed, err = entry.GetDisclosedCredentials(client.Configuration)
 	require.NoError(t, err)
 	require.NotEmpty(t, disclosed)
 
-	// Test before parameter
-	logs, err = client.LoadLogsBefore(entry.ID, 100)
-	require.NoError(t, err)
-	require.True(t, len(logs) == oldLogLength+1)
-	require.True(t, logs[0].ID < entry.ID)
-
-	// Test max parameter
-	logs, err = client.LoadNewestLogs(1)
-	require.NoError(t, err)
-	require.True(t, len(logs) == oldLogLength+1)
-
 	// Do signature session
 	request = getSigningRequest(attrid)
 	sessionHelper(t, request, "signature", client)
-	logs, err = client.LoadNewestLogs(100)
+	logs, err = client.Logs()
 	require.NoError(t, err)
 	require.True(t, len(logs) == oldLogLength+3)
-	entry = logs[0]
+	entry = logs[len(logs)-1]
 	require.NotNil(t, entry)
 	require.NoError(t, err)
 	sig, err := entry.GetSignedMessage()

@@ -84,7 +84,7 @@ type SessionResult struct {
 	Signature   *irma.SignedMessage          `json:"signature,omitempty"`
 	Err         *irma.RemoteError            `json:"error,omitempty"`
 
-	LegacySession bool `json:"-"` // true if request was started with legacy (i.e. pre-condiscon) session request
+	Legacy bool `json:"-"` // true if request was started with legacy (i.e. pre-condiscon) session request
 }
 
 // Status is the status of an IRMA session.
@@ -99,23 +99,25 @@ const (
 )
 
 // Remove this when dropping support for legacy pre-condiscon session requests
-type LegacySessionResult struct {
-	Token       string                     `json:"token"`
-	Status      Status                     `json:"status"`
-	Type        irma.Action                `json:"type"`
-	ProofStatus irma.ProofStatus           `json:"proofStatus,omitempty"`
-	Disclosed   []*irma.DisclosedAttribute `json:"disclosed,omitempty"`
-	Signature   *irma.SignedMessage        `json:"signature,omitempty"`
-	Err         *irma.RemoteError          `json:"error,omitempty"`
-}
+func (r *SessionResult) MarshalJSON() ([]byte, error) {
+	if !r.Legacy {
+		type tmpSessionResult SessionResult
+		return json.Marshal((*tmpSessionResult)(r))
+	}
 
-// Remove this when dropping support for legacy pre-condiscon session requests
-func (r *SessionResult) Legacy() *LegacySessionResult {
 	var disclosed []*irma.DisclosedAttribute
 	for _, l := range r.Disclosed {
 		disclosed = append(disclosed, l[0])
 	}
-	return &LegacySessionResult{r.Token, r.Status, r.Type, r.ProofStatus, disclosed, r.Signature, r.Err}
+	return json.Marshal(struct {
+		Token       string                     `json:"token"`
+		Status      Status                     `json:"status"`
+		Type        irma.Action                `json:"type"'`
+		ProofStatus irma.ProofStatus           `json:"proofStatus,omitempty"`
+		Disclosed   []*irma.DisclosedAttribute `json:"disclosed,omitempty"`
+		Signature   *irma.SignedMessage        `json:"signature,omitempty"`
+		Err         *irma.RemoteError          `json:"error,omitempty"`
+	}{r.Token, r.Status, r.Type, r.ProofStatus, disclosed, r.Signature, r.Err})
 }
 
 func (conf *Configuration) PrivateKey(id irma.IssuerIdentifier) (sk *gabi.PrivateKey, err error) {

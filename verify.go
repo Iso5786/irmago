@@ -31,11 +31,10 @@ const (
 
 // DisclosedAttribute represents a disclosed attribute.
 type DisclosedAttribute struct {
-	RawValue     *string                 `json:"rawvalue"`
-	Value        TranslatedString        `json:"value"` // Value of the disclosed attribute
-	Identifier   AttributeTypeIdentifier `json:"id"`
-	Status       AttributeProofStatus    `json:"status"`
-	IssuanceTime Timestamp               `json:"issuancetime"`
+	RawValue   *string                 `json:"rawvalue"`
+	Value      TranslatedString        `json:"value"` // Value of the disclosed attribute
+	Identifier AttributeTypeIdentifier `json:"id"`
+	Status     AttributeProofStatus    `json:"status"`
 }
 
 // ProofList is a gabi.ProofList with some extra methods.
@@ -244,11 +243,10 @@ func parseAttribute(index int, metadata *MetadataAttribute, attr *big.Int) (*Dis
 		status = AttributeProofStatusNull
 	}
 	return &DisclosedAttribute{
-		Identifier:   attrid,
-		RawValue:     attrval,
-		Value:        NewTranslatedString(attrval),
-		Status:       status,
-		IssuanceTime: Timestamp(metadata.SigningDate()),
+		Identifier: attrid,
+		RawValue:   attrval,
+		Value:      NewTranslatedString(attrval),
+		Status:     status,
 	}, attrval, nil
 }
 

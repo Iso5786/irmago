@@ -408,28 +408,22 @@ func (dr *DisclosureRequest) Disclosure() *DisclosureRequest {
 	return dr
 }
 
-func (dr *DisclosureRequest) identifiers() *IrmaIdentifierSet {
-	ids := &IrmaIdentifierSet{
-		SchemeManagers:  map[SchemeManagerIdentifier]struct{}{},
-		Issuers:         map[IssuerIdentifier]struct{}{},
-		CredentialTypes: map[CredentialTypeIdentifier]struct{}{},
-		PublicKeys:      map[IssuerIdentifier][]int{},
-	}
-
-	_ = dr.Disclose.Iterate(func(a *AttributeRequest) error {
-		attr := a.Type
-		ids.SchemeManagers[attr.CredentialTypeIdentifier().IssuerIdentifier().SchemeManagerIdentifier()] = struct{}{}
-		ids.Issuers[attr.CredentialTypeIdentifier().IssuerIdentifier()] = struct{}{}
-		ids.CredentialTypes[attr.CredentialTypeIdentifier()] = struct{}{}
-		return nil
-	})
-
-	return ids
-}
-
 func (dr *DisclosureRequest) Identifiers() *IrmaIdentifierSet {
 	if dr.ids == nil {
-		dr.ids = dr.identifiers()
+		dr.ids = &IrmaIdentifierSet{
+			SchemeManagers:  map[SchemeManagerIdentifier]struct{}{},
+			Issuers:         map[IssuerIdentifier]struct{}{},
+			CredentialTypes: map[CredentialTypeIdentifier]struct{}{},
+			PublicKeys:      map[IssuerIdentifier][]int{},
+		}
+
+		_ = dr.Disclose.Iterate(func(a *AttributeRequest) error {
+			attr := a.Type
+			dr.ids.SchemeManagers[attr.CredentialTypeIdentifier().IssuerIdentifier().SchemeManagerIdentifier()] = struct{}{}
+			dr.ids.Issuers[attr.CredentialTypeIdentifier().IssuerIdentifier()] = struct{}{}
+			dr.ids.CredentialTypes[attr.CredentialTypeIdentifier()] = struct{}{}
+			return nil
+		})
 	}
 	return dr.ids
 }
@@ -551,7 +545,7 @@ func (ir *IssuanceRequest) Identifiers() *IrmaIdentifierSet {
 			ir.ids.PublicKeys[issuer] = append(ir.ids.PublicKeys[issuer], credreq.KeyCounter)
 		}
 
-		ir.ids.join(ir.DisclosureRequest.identifiers())
+		ir.ids.join(ir.DisclosureRequest.Identifiers())
 	}
 	return ir.ids
 }

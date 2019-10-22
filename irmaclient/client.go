@@ -1,9 +1,9 @@
 package irmaclient
 
 import (
-	"path/filepath"
 	"strconv"
 	"time"
+	"path/filepath"
 
 	"github.com/bwesterb/go-atum"
 	"github.com/getsentry/raven-go"
@@ -44,6 +44,7 @@ type Client struct {
 	attributes       map[irma.CredentialTypeIdentifier][]*irma.AttributeList
 	credentialsCache map[irma.CredentialTypeIdentifier]map[int]*credential
 	keyshareServers  map[irma.SchemeManagerIdentifier]*keyshareServer
+	logs             []*LogEntry
 	updates          []update
 
 	// Where we store/load it to/from
@@ -140,7 +141,7 @@ func New(
 		handler:               handler,
 	}
 
-	cm.Configuration, err = irma.NewConfigurationFromAssets(filepath.Join(storagePath, "irma_configuration"), irmaConfigurationPath)
+	cm.Configuration, err = irma.NewConfigurationFromAssets(filepath.Join(storagePath,"irma_configuration"), irmaConfigurationPath)
 	if err != nil {
 		return nil, err
 	}
@@ -288,8 +289,8 @@ func (client *Client) remove(id irma.CredentialTypeIdentifier, index int, storen
 	removed[id] = attrs.Strings()
 
 	if storenow {
-		return client.storage.AddLogEntry(&LogEntry{
-			Type:    ActionRemoval,
+		return client.addLogEntry(&LogEntry{
+			Type:    actionRemoval,
 			Time:    irma.Timestamp(time.Now()),
 			Removed: removed,
 		})
@@ -328,11 +329,14 @@ func (client *Client) RemoveAllCredentials() error {
 	}
 
 	logentry := &LogEntry{
-		Type:    ActionRemoval,
+		Type:    actionRemoval,
 		Time:    irma.Timestamp(time.Now()),
 		Removed: removed,
 	}
-	return client.storage.AddLogEntry(logentry)
+	if err := client.addLogEntry(logentry); err != nil {
+		return err
+	}
+	return client.storage.StoreLogs(client.logs)
 }
 
 // Attribute and credential getter methods
@@ -576,7 +580,7 @@ func (client *Client) missingAttributes(discon irma.AttributeDisCon) map[int]map
 				continue
 			}
 			for _, cred := range creds {
-				if cred.IsValid() && req.Satisfy(req.Type, cred.UntranslatedAttribute(req.Type)) {
+				if req.Satisfy(req.Type, cred.UntranslatedAttribute(req.Type)) {
 					continue conloop
 				}
 			}
@@ -962,16 +966,21 @@ func (client *Client) KeyshareRemoveAll() error {
 
 // Add, load and store log entries
 
-// LoadNewestLogs returns the log entries of latest past events
-// (sorted from new to old, the result length is limited to max).
-func (client *Client) LoadNewestLogs(max int) ([]*LogEntry, error) {
-	return client.storage.LoadNewestLogs(max)
+func (client *Client) addLogEntry(entry *LogEntry) error {
+	client.logs = append(client.logs, entry)
+	return client.storage.StoreLogs(client.logs)
 }
 
-// LoadLogsBefore returns the log entries of past events that took place before log entry with ID 'beforeIndex'
-// (sorted from new to old, the result length is limited to max).
-func (client *Client) LoadLogsBefore(beforeIndex uint64, max int) ([]*LogEntry, error) {
-	return client.storage.LoadLogsBefore(beforeIndex, max)
+// Logs returns the log entries of past events.
+func (client *Client) Logs() ([]*LogEntry, error) {
+	if client.logs == nil || len(client.logs) == 0 {
+		var err error
+		client.logs, err = client.storage.LoadLogs()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return client.logs, nil
 }
 
 // SetCrashReportingPreference toggles whether or not crash reports should be sent to Sentry.

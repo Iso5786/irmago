@@ -1,7 +1,6 @@
 package servercore
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -46,30 +45,6 @@ func (session *session) fail(err server.Error, message string) *irma.RemoteError
 	session.setStatus(server.StatusCancelled)
 	session.result = &server.SessionResult{Err: rerr, Token: session.token, Status: server.StatusCancelled, Type: session.action}
 	return rerr
-}
-
-const retryTimeLimit = 10 * time.Second
-
-// checkCache returns a previously cached response, for replaying against multiple requests from
-// irmago's retryablehttp client, if:
-// - the same was POSTed as last time
-// - last time was not more than 10 seconds ago (retryablehttp client gives up before this)
-// - the session status is what it is expected to be when receiving the request for a second time.
-func (session *session) checkCache(message []byte, expectedStatus server.Status) (int, []byte) {
-	if len(session.responseCache.response) > 0 {
-		if session.responseCache.sessionStatus != expectedStatus {
-			// don't replay a cache value that was set in a previous session state
-			session.responseCache = responseCache{}
-			return 0, nil
-		}
-		if sha256.Sum256(session.responseCache.message) != sha256.Sum256(message) ||
-			session.lastActive.Before(time.Now().Add(-retryTimeLimit)) ||
-			session.status != expectedStatus {
-			return server.JsonResponse(nil, session.fail(server.ErrorUnexpectedRequest, ""))
-		}
-		return session.responseCache.status, session.responseCache.response
-	}
-	return 0, nil
 }
 
 // Issuance helpers

@@ -3,21 +3,20 @@ package irma
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
-
-	"github.com/privacybydesign/irmago/internal/fs"
 )
 
 // SchemeManagerPointer points to a remote IRMA scheme, containing information to download the scheme,
 // including its (pinned) public key.
 type SchemeManagerPointer struct {
 	Url       string // URL to download scheme from
+	Demo      bool   // Whether or not this is a demo scheme; if true, private keys are also downloaded
 	Publickey []byte // Public key of scheme against which to verify files after they have been downloaded
 }
 
 var DefaultSchemeManagers = [2]SchemeManagerPointer{
 	{
-		Url: "https://privacybydesign.foundation/schememanager/irma-demo",
+		Url:  "https://privacybydesign.foundation/schememanager/irma-demo",
+		Demo: true,
 		Publickey: []byte(`-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHVnmAY+kGkFZn7XXozdI4HY8GOjm
 54ngh4chTfn6WsTCf2w5rprfIqML61z2VTE4k8yJ0Z1QbyW6cdaao8obTQ==
@@ -43,20 +42,17 @@ func (conf *Configuration) DownloadDefaultSchemes() error {
 		if err := conf.InstallSchemeManager(scheme, s.Publickey); err != nil {
 			return err
 		}
+		if s.Demo {
+			if err := conf.downloadPrivateKeys(scheme); err != nil {
+				return err
+			}
+		}
 	}
 	Logger.Info("Finished downloading schemes")
 	return nil
 }
 
-// downloadDemoPrivateKeys attempts to download the scheme and issuer private keys, if the scheme is
-// a demo scheme and if they are not already present in the scheme, without failing if any of them
-// is not available.
-func (conf *Configuration) downloadDemoPrivateKeys(scheme *SchemeManager) error {
-	if !scheme.Demo {
-		return nil
-	}
-
-	Logger.Debugf("Attempting downloading of private keys of scheme %s", scheme.ID)
+func (conf *Configuration) downloadPrivateKeys(scheme *SchemeManager) error {
 	transport := NewHTTPTransport(scheme.URL)
 
 	err := transport.GetFile("sk.pem", filepath.Join(conf.Path, scheme.ID, "sk.pem"))
@@ -64,25 +60,18 @@ func (conf *Configuration) downloadDemoPrivateKeys(scheme *SchemeManager) error 
 		Logger.Warnf("Downloading private key of scheme %s failed ", scheme.ID)
 	}
 
-	pkpath := fmt.Sprintf(pubkeyPattern, conf.Path, scheme.ID, "*")
-	files, err := filepath.Glob(pkpath)
-	if err != nil {
-		return err
-	}
-
-	// For each public key, attempt to download a corresponding private key
-	for _, file := range files {
-		i := strings.LastIndex(pkpath, "PublicKeys")
-		skpath := file[:i] + strings.Replace(file[i:], "PublicKeys", "PrivateKeys", 1)
-		parts := strings.Split(skpath, "/")
-		local := filepath.FromSlash(skpath)
-		exists, err := fs.PathExists(local)
-		if exists || err != nil {
-			continue
+	for issid := range conf.Issuers {
+		// For all public keys that this issuer has in storage, see if a corresponding private key can be downloaded
+		indices, err := conf.PublicKeyIndices(issid)
+		if err != nil {
+			return err
 		}
-		remote := strings.Join(parts[len(parts)-3:len(parts)], "/")
-		if err = transport.GetFile(remote, local); err != nil {
-			Logger.Warnf("Downloading private key %s failed: %s", skpath, err)
+		for _, index := range indices {
+			remote := fmt.Sprintf("%s/PrivateKeys/%d.xml", issid.Name(), index)
+			local := filepath.Join(conf.Path, scheme.ID, remote)
+			if err = transport.GetFile(remote, filepath.FromSlash(local)); err != nil {
+				Logger.Warnf("Downloading private key %d of issuer %s failed", index, issid.String())
+			}
 		}
 	}
 

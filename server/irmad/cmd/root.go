@@ -104,7 +104,6 @@ func setFlags(cmd *cobra.Command, production bool) error {
 	flags.StringP("schemes-path", "s", schemespath, "path to irma_configuration")
 	flags.String("schemes-assets-path", "", "if specified, copy schemes from here into --schemes-path")
 	flags.Int("schemes-update", 60, "update IRMA schemes every x minutes (0 to disable)")
-	flags.Bool("disable-schemes-update", false, "disable IRMA scheme updating")
 	flags.StringP("privkeys", "k", "", "path to IRMA private keys")
 	flags.String("static-path", "", "Host files under this path as static files (leave empty to disable)")
 	flags.String("static-prefix", "/", "Host static files under this URL prefix")
@@ -126,7 +125,6 @@ func setFlags(cmd *cobra.Command, production bool) error {
 		issHelp += " (default *)"
 	}
 	flags.StringSlice("issue-perms", nil, issHelp)
-	flags.String("static-sessions", "", "preconfigured static sessions (in JSON)")
 	flags.Lookup("no-auth").Header = `Requestor authentication and default requestor permissions`
 
 	flags.StringP("jwt-issuer", "j", "irmaserver", "JWT issuer")
@@ -190,9 +188,6 @@ func configure(cmd *cobra.Command) error {
 	mode := "development"
 	if viper.GetBool("production") {
 		mode = "production"
-		viper.SetDefault("no-auth", false)
-		viper.SetDefault("no-email", false)
-		viper.SetDefault("url", "")
 	}
 	logger.WithFields(logrus.Fields{
 		"version":   irma.Version,
@@ -217,7 +212,7 @@ func configure(cmd *cobra.Command) error {
 			SchemesPath:           viper.GetString("schemes-path"),
 			SchemesAssetsPath:     viper.GetString("schemes-assets-path"),
 			SchemesUpdateInterval: viper.GetInt("schemes-update"),
-			DisableSchemesUpdate:  viper.GetBool("disable-schemes-update") || viper.GetInt("schemes-update") == 0,
+			DisableSchemesUpdate:  viper.GetInt("schemes-update") == 0,
 			IssuerPrivateKeysPath: viper.GetString("privkeys"),
 			URL:        viper.GetString("url"),
 			DisableTLS: viper.GetBool("no-tls"),
@@ -279,29 +274,8 @@ func configure(cmd *cobra.Command) error {
 		}
 	}
 
-	if err = handleMapOrString("static-sessions", &conf.StaticSessions); err != nil {
-		return err
-	}
-
 	logger.Debug("Done configuring")
 
-	return nil
-}
-
-func handleMapOrString(key string, dest interface{}) error {
-	var m map[string]interface{}
-	var err error
-	if val, flagOrEnv := viper.Get(key).(string); !flagOrEnv || val != "" {
-		if m, err = cast.ToStringMapE(viper.Get(key)); err != nil {
-			return errors.WrapPrefix(err, "Failed to unmarshal "+key+" from flag or env var", 0)
-		}
-	}
-	if len(m) == 0 {
-		return nil
-	}
-	if err := mapstructure.Decode(m, dest); err != nil {
-		return errors.WrapPrefix(err, "Failed to unmarshal "+key+" from config file", 0)
-	}
 	return nil
 }
 
@@ -322,7 +296,7 @@ func handlePermission(typ string) []string {
 func productionMode() bool {
 	for i, arg := range os.Args {
 		if arg == "--production" {
-			if len(os.Args) == i+1 || strings.HasPrefix(os.Args[i+1], "-") {
+			if len(os.Args) == i+1 || strings.HasPrefix(os.Args[i+1], "--") {
 				return true
 			}
 			if checkConfVal(os.Args[i+1]) {

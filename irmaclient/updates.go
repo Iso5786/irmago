@@ -1,11 +1,10 @@
 package irmaclient
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/privacybydesign/irmago"
-	"go.etcd.io/bbolt"
+	"github.com/privacybydesign/irmago/internal/fs"
 )
 
 // This file contains the update mechanism for Client
@@ -28,48 +27,46 @@ var clientUpdates = []func(client *Client) error{
 	nil, // made irrelevant by irma_configuration-autocopying
 
 	// 2: Rename config -> preferences
-	nil, // No longer necessary
+	func(client *Client) (err error) {
+		exists, err := fs.PathExists(client.storage.path("config"))
+		if !exists || err != nil {
+			return
+		}
+		oldStruct := &struct {
+			SendCrashReports bool
+		}{}
+		// Load old file, convert to new struct, and save
+		err = client.storage.load(oldStruct, "config")
+		if err != nil {
+			return err
+		}
+		client.Preferences = Preferences{
+			EnableCrashReporting: oldStruct.SendCrashReports,
+		}
+		return client.storage.StorePreferences(client.Preferences)
+	},
 
 	// 3: Copy new irma_configuration out of assets
 	nil, // made irrelevant by irma_configuration-autocopying
 
 	// 4: For each keyshare server, include in its struct the identifier of its scheme manager
-	nil, // No longer necessary
+	func(client *Client) (err error) {
+		keyshareServers, err := client.storage.LoadKeyshareServers()
+		if err != nil {
+			return err
+		}
+		for smi, kss := range keyshareServers {
+			kss.SchemeManagerIdentifier = smi
+		}
+		return client.storage.StoreKeyshareServers(keyshareServers)
+	},
 
 	// 5: Remove the test scheme manager which was erroneously included in a production build
 	nil, // No longer necessary, also broke many unit tests
 
 	// 6: Remove earlier log items of wrong format
-	nil, // No longer necessary
-
-	// 7: Concert log entries to bbolt database
-	func(client *Client) error {
-		var logs []*LogEntry
-		var err error
-		if err = client.storage.load(&logs, logsFile); err != nil {
-			return err
-		}
-		// Open one bolt transaction to process all our log entries in
-		err = client.storage.db.Update(func(tx *bbolt.Tx) error {
-			for _, log := range logs {
-				// As log.Request is a json.RawMessage it would not get updated to the new session request
-				// format by re-marshaling the containing struct, as normal struct members would,
-				// so update it manually now by marshaling the session request into it.
-				req, err := log.SessionRequest()
-				if err != nil {
-					return err
-				}
-				log.Request, err = json.Marshal(req)
-				if err != nil {
-					return err
-				}
-				if err = client.storage.TxAddLogEntry(tx, log); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		return err
+	func(client *Client) (err error) {
+		return client.storage.StoreLogs([]*LogEntry{})
 	},
 }
 

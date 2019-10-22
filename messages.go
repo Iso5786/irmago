@@ -163,7 +163,6 @@ const (
 	ActionDisclosing    = Action("disclosing")
 	ActionSigning       = Action("signing")
 	ActionIssuing       = Action("issuing")
-	ActionRedirect      = Action("redirect")
 	ActionUnknown       = Action("unknown")
 )
 
@@ -294,9 +293,6 @@ func ParseRequestorJwt(action string, requestorJwt string) (RequestorJwt, error)
 	if _, _, err := new(jwt.Parser).ParseUnverified(requestorJwt, retval); err != nil {
 		return nil, err
 	}
-	if err := retval.RequestorRequest().Validate(); err != nil {
-		return nil, errors.WrapPrefix(err, "Invalid JWT body", 0)
-	}
 	return retval, nil
 }
 
@@ -316,7 +312,6 @@ func (qr *Qr) Validate() (err error) {
 	case ActionDisclosing: // nop
 	case ActionIssuing: // nop
 	case ActionSigning: // nop
-	case ActionRedirect: // nop
 	default:
 		return errors.New("Unsupported session type")
 	}

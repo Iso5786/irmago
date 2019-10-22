@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/bwesterb/go-atum"
-	"github.com/getsentry/raven-go"
 	"github.com/go-errors/errors"
 	"github.com/privacybydesign/gabi"
 	"github.com/privacybydesign/gabi/big"
@@ -165,19 +164,6 @@ func (client *Client) newSchemeSession(qr *irma.SchemeManagerRequest, handler Ha
 
 // newQrSession creates and starts a new interactive IRMA session
 func (client *Client) newQrSession(qr *irma.Qr, handler Handler) SessionDismisser {
-	if qr.Type == irma.ActionRedirect {
-		newqr := &irma.Qr{}
-		if err := irma.NewHTTPTransport("").Post(qr.URL, newqr, struct{}{}); err != nil {
-			handler.Failure(&irma.SessionError{ErrorType: irma.ErrorTransport, Err: errors.Wrap(err, 0)})
-			return nil
-		}
-		if newqr.Type == irma.ActionRedirect { // explicitly avoid infinite recursion
-			handler.Failure(&irma.SessionError{ErrorType: irma.ErrorInvalidRequest, Err: errors.New("infinite static QR recursion")})
-			return nil
-		}
-		return client.newQrSession(newqr, handler)
-	}
-
 	u, _ := url.ParseRequestURI(qr.URL) // Qr validator already checked this for errors
 	session := &session{
 		ServerURL: qr.URL,
@@ -396,11 +382,7 @@ func (session *session) sendResponse(message interface{}) {
 				return
 			}
 		}
-		log, err = session.createLogEntry(message)
-		if err != nil {
-			irma.Logger.Warn(errors.WrapPrefix(err, "Failed to create log entry", 0).ErrorStack())
-			raven.CaptureError(err, nil)
-		}
+		log, _ = session.createLogEntry(message) // TODO err
 	case irma.ActionDisclosing:
 		messageJson, err = json.Marshal(message)
 		if err != nil {
@@ -418,11 +400,7 @@ func (session *session) sendResponse(message interface{}) {
 				return
 			}
 		}
-		log, err = session.createLogEntry(message)
-		if err != nil {
-			irma.Logger.Warn(errors.WrapPrefix(err, "Failed to create log entry", 0).ErrorStack())
-			raven.CaptureError(err, nil)
-		}
+		log, _ = session.createLogEntry(message) // TODO err
 	case irma.ActionIssuing:
 		response := []*gabi.IssueSignatureMessage{}
 		if err = session.transport.Post("commitments", &response, message); err != nil {
@@ -433,16 +411,10 @@ func (session *session) sendResponse(message interface{}) {
 			session.fail(&irma.SessionError{ErrorType: irma.ErrorCrypto, Err: err})
 			return
 		}
-		log, err = session.createLogEntry(message)
-		if err != nil {
-			irma.Logger.Warn(errors.WrapPrefix(err, "Failed to create log entry", 0).ErrorStack())
-			raven.CaptureError(err, nil)
-		}
+		log, _ = session.createLogEntry(message) // TODO err
 	}
 
-	if err = session.client.storage.AddLogEntry(log); err != nil {
-		irma.Logger.Warn(errors.WrapPrefix(err, "Failed to write log entry", 0).ErrorStack())
-	}
+	_ = session.client.addLogEntry(log) // TODO err
 	if session.Action == irma.ActionIssuing {
 		session.client.handler.UpdateAttributes()
 	}

@@ -2,7 +2,6 @@ package irma
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"io"
@@ -67,20 +66,14 @@ func NewHTTPTransport(serverURL string) *HTTPTransport {
 		return c, nil
 	}
 
-	client := &retryablehttp.Client{
-		Logger:       transportlogger,
-		RetryWaitMin: 100 * time.Millisecond,
-		RetryWaitMax: 200 * time.Millisecond,
-		RetryMax:     2,
-		Backoff:      retryablehttp.DefaultBackoff,
-		CheckRetry: func(ctx context.Context, resp *http.Response, err error) (bool, error) {
-			// Don't retry on 5xx (which retryablehttp does by default)
-			return err != nil || resp.StatusCode == 0, err
-		},
-		HTTPClient: &http.Client{
-			Timeout:   time.Second * 3,
-			Transport: &innerTransport,
-		},
+	client := retryablehttp.NewClient()
+	client.RetryMax = 3
+	client.RetryWaitMin = 100 * time.Millisecond
+	client.RetryWaitMax = 500 * time.Millisecond
+	client.Logger = transportlogger
+	client.HTTPClient = &http.Client{
+		Timeout:   time.Second * 5,
+		Transport: &innerTransport,
 	}
 
 	return &HTTPTransport{

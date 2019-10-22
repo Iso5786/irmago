@@ -1,17 +1,14 @@
 package irmaclient
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/privacybydesign/gabi"
 	"github.com/privacybydesign/irmago"
 	"github.com/privacybydesign/irmago/internal/fs"
-	"go.etcd.io/bbolt"
 )
 
 // This file contains the storage struct and its methods,
@@ -20,7 +17,6 @@ import (
 // Storage provider for a Client
 type storage struct {
 	storagePath   string
-	db            *bbolt.DB
 	Configuration *irma.Configuration
 }
 
@@ -33,13 +29,6 @@ const (
 	logsFile        = "logs"
 	preferencesFile = "preferences"
 	signaturesDir   = "sigs"
-
-	databaseFile = "db"
-)
-
-// Bucketnames bbolt
-const (
-	logsBucket = "logs"
 )
 
 func (s *storage) path(p string) string {
@@ -52,15 +41,10 @@ func (s *storage) path(p string) string {
 // Setting it up in a properly protected location (e.g., with automatic
 // backups to iCloud/Google disabled) is the responsibility of the user.
 func (s *storage) EnsureStorageExists() error {
-	var err error
-	if err = fs.AssertPathExists(s.storagePath); err != nil {
+	if err := fs.AssertPathExists(s.storagePath); err != nil {
 		return err
 	}
-	if err = fs.EnsureDirectoryExists(s.path(signaturesDir)); err != nil {
-		return err
-	}
-	s.db, err = bbolt.Open(s.path(databaseFile), 0600, &bbolt.Options{Timeout: 1 * time.Second})
-	return err
+	return fs.EnsureDirectoryExists(s.path(signaturesDir))
 }
 
 func (s *storage) load(dest interface{}, path string) (err error) {
@@ -121,34 +105,6 @@ func (s *storage) StoreKeyshareServers(keyshareServers map[irma.SchemeManagerIde
 
 func (s *storage) StoreLogs(logs []*LogEntry) error {
 	return s.store(logs, logsFile)
-}
-
-func (s *storage) AddLogEntry(entry *LogEntry) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
-		return s.TxAddLogEntry(tx, entry)
-	})
-}
-
-func (s *storage) TxAddLogEntry(tx *bbolt.Tx, entry *LogEntry) error {
-	b, err := tx.CreateBucketIfNotExists([]byte(logsBucket))
-	if err != nil {
-		return err
-	}
-
-	entry.ID, err = b.NextSequence()
-	if err != nil {
-		return err
-	}
-	k := s.logEntryKeyToBytes(entry.ID)
-	v, err := json.Marshal(entry)
-
-	return b.Put(k, v)
-}
-
-func (s *storage) logEntryKeyToBytes(id uint64) []byte {
-	k := make([]byte, 8)
-	binary.BigEndian.PutUint64(k, id)
-	return k
 }
 
 func (s *storage) StorePreferences(prefs Preferences) error {
@@ -224,44 +180,12 @@ func (s *storage) LoadKeyshareServers() (ksses map[irma.SchemeManagerIdentifier]
 	return ksses, nil
 }
 
-// Returns all logs stored before log with ID 'index' sorted from new to old with
-// a maximum result length of 'max'.
-func (s *storage) LoadLogsBefore(index uint64, max int) ([]*LogEntry, error) {
-	return s.loadLogs(max, func(c *bbolt.Cursor) (key, value []byte) {
-		c.Seek(s.logEntryKeyToBytes(index))
-		return c.Prev()
-	})
-}
-
-// Returns the latest logs stored sorted from new to old with a maximum result length of 'max'
-func (s *storage) LoadNewestLogs(max int) ([]*LogEntry, error) {
-	return s.loadLogs(max, func(c *bbolt.Cursor) (key, value []byte) {
-		return c.Last()
-	})
-}
-
-// Returns the logs stored sorted from new to old with a maximum result length of 'max' where the starting position
-// of the bbolt cursor can be manipulated by the anonymous function 'startAt'. 'startAt' should return
-// the key and the value of the first element from the bbolt database that should be loaded.
-func (s *storage) loadLogs(max int, startAt func(*bbolt.Cursor) (key, value []byte)) ([]*LogEntry, error) {
-	logs := make([]*LogEntry, 0, max)
-	return logs, s.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(logsBucket))
-		if bucket == nil {
-			return nil
-		}
-		c := bucket.Cursor()
-
-		for k, v := startAt(c); k != nil && len(logs) < max; k, v = c.Prev() {
-			var log LogEntry
-			if err := json.Unmarshal(v, &log); err != nil {
-				return err
-			}
-
-			logs = append(logs, &log)
-		}
-		return nil
-	})
+func (s *storage) LoadLogs() (logs []*LogEntry, err error) {
+	logs = []*LogEntry{}
+	if err := s.load(&logs, logsFile); err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 func (s *storage) LoadUpdates() (updates []update, err error) {

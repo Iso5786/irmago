@@ -12,45 +12,37 @@ import (
 // LogEntry is a log entry of a past event.
 type LogEntry struct {
 	// General info
-	ID   uint64
-	Type irma.Action
-	Time irma.Timestamp // Time at which the session was completed
+	Type    irma.Action
+	Time    irma.Timestamp        // Time at which the session was completed
+	Version *irma.ProtocolVersion `json:",omitempty"` // Protocol version that was used in the session
 
-	// Credential removal
-	Removed map[irma.CredentialTypeIdentifier][]irma.TranslatedString `json:",omitempty"`
+	Request json.RawMessage     `json:",omitempty"` // Message that started the session
+	request irma.SessionRequest // cached parsed version of Request; get with LogEntry.SessionRequest()
 
-	// Signature sessions
-	SignedMessage          []byte          `json:",omitempty"`
-	Timestamp              *atum.Timestamp `json:",omitempty"`
-	SignedMessageLDContext string          `json:",omitempty"`
+	// Session type-specific info
+	Removed                map[irma.CredentialTypeIdentifier][]irma.TranslatedString `json:",omitempty"` // In case of credential removal
+	SignedMessage          []byte                                                    `json:",omitempty"` // In case of signature sessions
+	Timestamp              *atum.Timestamp                                           `json:",omitempty"` // In case of signature sessions
+	SignedMessageLDContext string                                                    `json:",omitempty"` // In case of signature sessions
 
-	// Issuance sessions
 	IssueCommitment *irma.IssueCommitmentMessage `json:",omitempty"`
-
-	// All session types
-	ServerName irma.TranslatedString `json:",omitempty"`
-	Version    *irma.ProtocolVersion `json:",omitempty"`
-	Disclosure *irma.Disclosure      `json:",omitempty"`
-	Request    json.RawMessage       `json:",omitempty"` // Message that started the session
-	request    irma.SessionRequest   // cached parsed version of Request; get with LogEntry.SessionRequest()
+	Disclosure      *irma.Disclosure             `json:",omitempty"`
 }
 
-const ActionRemoval = irma.Action("removal")
+const actionRemoval = irma.Action("removal")
 
 func (entry *LogEntry) SessionRequest() (irma.SessionRequest, error) {
-	if entry.request != nil {
-		return entry.request, nil
-	}
-
-	switch entry.Type {
-	case irma.ActionDisclosing:
-		entry.request = &irma.DisclosureRequest{}
-	case irma.ActionSigning:
-		entry.request = &irma.SignatureRequest{}
-	case irma.ActionIssuing:
-		entry.request = &irma.IssuanceRequest{}
-	default:
-		return nil, nil
+	if entry.request == nil {
+		switch entry.Type {
+		case irma.ActionDisclosing:
+			entry.request = &irma.DisclosureRequest{}
+		case irma.ActionSigning:
+			entry.request = &irma.SignatureRequest{}
+		case irma.ActionIssuing:
+			entry.request = &irma.IssuanceRequest{}
+		default:
+			return nil, nil
+		}
 	}
 
 	err := json.Unmarshal([]byte(entry.Request), entry.request)
@@ -72,7 +64,7 @@ func (entry *LogEntry) setSessionRequest() error {
 
 // GetDisclosedCredentials gets the list of disclosed credentials for a log entry
 func (entry *LogEntry) GetDisclosedCredentials(conf *irma.Configuration) ([][]*irma.DisclosedAttribute, error) {
-	if entry.Type == ActionRemoval {
+	if entry.Type == actionRemoval {
 		return [][]*irma.DisclosedAttribute{}, nil
 	}
 
@@ -125,11 +117,10 @@ func (entry *LogEntry) GetSignedMessage() (abs *irma.SignedMessage, err error) {
 
 func (session *session) createLogEntry(response interface{}) (*LogEntry, error) {
 	entry := &LogEntry{
-		Type:       session.Action,
-		Time:       irma.Timestamp(time.Now()),
-		ServerName: session.ServerName,
-		Version:    session.Version,
-		request:    session.request,
+		Type:    session.Action,
+		Time:    irma.Timestamp(time.Now()),
+		Version: session.Version,
+		request: session.request,
 	}
 
 	if err := entry.setSessionRequest(); err != nil {
@@ -137,11 +128,12 @@ func (session *session) createLogEntry(response interface{}) (*LogEntry, error) 
 	}
 
 	switch entry.Type {
-	case ActionRemoval:
+	case actionRemoval:
 
 	case irma.ActionSigning:
 		// Get the signed message and timestamp
-		entry.SignedMessage = []byte(session.request.(*irma.SignatureRequest).Message)
+		request := session.request.(*irma.SignatureRequest)
+		entry.SignedMessage = []byte(request.Message)
 		entry.Timestamp = session.timestamp
 		entry.SignedMessageLDContext = irma.LDContextSignedMessage
 
