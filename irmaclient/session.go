@@ -7,12 +7,13 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/bwesterb/go-atum"
 	"github.com/go-errors/errors"
 	"github.com/privacybydesign/gabi"
 	"github.com/privacybydesign/gabi/big"
-	"github.com/privacybydesign/irmago"
+	irma "github.com/privacybydesign/irmago"
 )
 
 // This file contains the logic and state of performing IRMA sessions, communicates
@@ -322,6 +323,18 @@ func (session *session) doSession(proceed bool) {
 	}
 	session.Handler.StatusUpdate(session.Action, irma.StatusCommunicating)
 
+	// if disclosing request is originating from a non-IRMA verifier,
+	// compute a verifiable presentation instead of an IRMA proof
+	if session.isExternalVerifier() {
+		message, err := session.getVerifiablePresentation()
+		if err != nil {
+			session.fail(&irma.SessionError{ErrorType: irma.ErrorCrypto, Err: err})
+			return
+		}
+		session.sendResponse(message)
+		return
+	}
+
 	if !session.Distributed() {
 		message, err := session.getProof()
 		if err != nil {
@@ -347,6 +360,127 @@ func (session *session) doSession(proceed bool) {
 		)
 	}
 }
+
+func (session *session) isExternalVerifier() bool {
+	// how to determine that disclosing request is from external verifier
+	return true
+}
+
+const LDVerifiableCredential = "https://www.w3.org/2018/credentials/v1"
+const LDContextDisclosureRequest = "https://irma.app/ld/request/disclosure/v2"
+
+func (session *session) getVerifiablePresentation() (interface{}, error) {
+	var err error
+	var attrValues [][]*irma.DisclosedAttribute
+	index := 0
+
+	typeServerURL := "https://irma.app"
+
+	// initialize verifiable presentation object
+	vcPres := irma.VerifiablePresentation{}
+	vcPres.LDContext = [2]string{LDVerifiableCredential, LDContextDisclosureRequest}
+	vcPres.Type = append(vcPres.Type, "VerifiablePresentation")
+
+	// get ProofList of disclosed credentials
+	builders, _, timestamp, err := session.client.ProofBuilders(session.choice, session.request)
+	if err != nil {
+		return nil, err
+	}
+
+	proofList := builders.BuildProofList(session.request.Base().GetContext(), session.request.GetNonce(timestamp), false)
+
+	vcPres.Proof.ProofMsg = proofList // irmaDisclosure.Proofs
+	vcPres.Proof.Created = time.Now().Format(time.RFC3339)
+	vcPres.Proof.Type = "AnonCredPresentationProofv1"
+
+	disjunctions := session.request.Disclosure()
+
+	disclosure := &irma.Disclosure{
+		Proofs:  proofList,
+		Indices: session.attrIndices,
+	}
+
+	_, attrValues, err = disclosure.DisclosedAttributes(session.client.Configuration, disjunctions.Disclose)
+
+	// iterate over each attribute to determine cred types in disclosure request
+	credTypes := make(map[irma.CredentialTypeIdentifier]bool)
+	_ = disjunctions.Disclose.Iterate(func(attr *irma.AttributeRequest) error {
+		credid := attr.Type.CredentialTypeIdentifier()
+		credTypes[credid] = true
+		return nil
+	})
+
+	// For each credential type within a disclosing session, a derived VC needs to be created
+	for credType, _ := range credTypes {
+
+		// Metadata attribute from related ProofD object
+		metadata := irma.MetadataFromInt(proofList[index].(*gabi.ProofD).ADisclosed[1], session.client.Configuration) // index 1 is metadata attribute
+
+		// Create derived credential
+		vc := irma.VerifiableCredential{}
+
+		// Context information
+		vc.LDContext = [2]string{LDVerifiableCredential, LDContextDisclosureRequest}
+
+		// Type information
+		vc.Type = make([]string, 1)
+		vc.Type[0] = "VerifiableCredential"
+		vc.Type = append(vc.Type, credType.Name())
+
+		// Credential schema information
+		vc.Schema.Type = credType.Name()
+		vc.Schema.Identifier = typeServerURL+"/type/"+strings.Replace(credType.Name(), ".", "/", -1)
+
+		// Proof information
+		vc.Proof.Type = "AnonCredDerivedCredentialv1"
+		vc.Proof.Created = metadata.SigningDate().Format(time.RFC3339) // credType SigningDate().Format(time.RFC3339)
+		vc.Proof.ProofMsg = proofList[index].(*gabi.ProofD).A // randomized signature
+
+		// Issuer information
+		issuerID := credType.IssuerIdentifier().Name()
+		metadataPk, _ := metadata.PublicKey()
+		vc.Issuer = typeServerURL + "/issuer/" + strings.Replace(issuerID, ".", "/", -1) + "/" + fmt.Sprint(metadataPk.Counter)
+
+		// Expiration date
+		vc.ExpirationDate = metadata.Expiry().Format(time.RFC3339)
+
+		// For each disclosed credential create one subject
+		vcSubject := irma.VCSubject{}
+		vcSubject.Attributes = make(map[string]irma.TranslatedString)
+
+		// Filter attributes belonging to this credentialType
+		var disclosed []*irma.DisclosedAttribute
+		for _, l := range attrValues {
+			for _, ll := range l {
+				s1 := ll.Identifier.CredentialTypeIdentifier().String()
+				s2 := metadata.CredentialType().Identifier().String()
+				if strings.Compare(s1, s2) == 0 {
+					disclosed = append(disclosed, ll)
+				}
+			}
+		}
+
+		// Map IRMA attributes to VC attributes
+		for _, value := range disclosed {
+			vcSubject.Attributes[value.Identifier.Name()] = value.Value
+		}
+
+		// Convert attributes tag to name of credential type id
+		byteSubject, _ := json.Marshal(vcSubject)
+		obj := map[string]interface{}{}
+		_ = json.Unmarshal([]byte(byteSubject), &obj)
+		obj[credType.Name()] = obj["attributes"]
+		delete(obj, "attributes")
+		vc.CredentialSubjects = append(vc.CredentialSubjects, obj)
+
+		vcPres.DerivedCredentials = append(vcPres.DerivedCredentials, vc)
+
+		index++
+	}
+
+	return vcPres, err
+}
+
 
 type disclosureResponse string
 
@@ -384,6 +518,7 @@ func (session *session) sendResponse(message interface{}) {
 		}
 		log, _ = session.createLogEntry(message) // TODO err
 	case irma.ActionDisclosing:
+		// TODO: Daniel - IRMA app - external verifier
 		messageJson, err = json.Marshal(message)
 		if err != nil {
 			session.fail(&irma.SessionError{ErrorType: irma.ErrorSerialization, Err: err})
@@ -402,6 +537,7 @@ func (session *session) sendResponse(message interface{}) {
 		}
 		log, _ = session.createLogEntry(message) // TODO err
 	case irma.ActionIssuing:
+		// TODO: Daniel - IRMA app - external issuer
 		response := []*gabi.IssueSignatureMessage{}
 		if err = session.transport.Post("commitments", &response, message); err != nil {
 			session.fail(err.(*irma.SessionError))
@@ -414,12 +550,17 @@ func (session *session) sendResponse(message interface{}) {
 		log, _ = session.createLogEntry(message) // TODO err
 	}
 
-	_ = session.client.addLogEntry(log) // TODO err
+	session.client.addLogEntry2(log)
+	//_ = session.client.addLogEntry(log) // TODO err
 	if session.Action == irma.ActionIssuing {
 		session.client.handler.UpdateAttributes()
 	}
 	session.done = true
 	session.Handler.Success(string(messageJson))
+}
+
+func (client *Client) addLogEntry2(entry *LogEntry) error {
+	return nil
 }
 
 // managerSession performs a "session" in which a new scheme manager is added (asking for permission first).
